@@ -1,0 +1,70 @@
+name: Build SukiSU For MTK 4.19 Kernel
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: "内核版本"
+        default: "4.19.191"
+        required: true
+      android_version:
+        description: "Android版本"
+        default: "12"
+        required: true
+      enable_susfs:
+        description: "开启SUSFS（加密绕过）"
+        default: true
+        type: boolean
+      enable_kpm:
+        description: "开启KPM模块支持"
+        default: true
+        type: boolean
+      disable_encrypt:
+        description: "关闭Data强制加密"
+        default: true
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: k-4.19
+          fetch-depth: 0
+
+      - name: 安装编译依赖
+        run: |
+          sudo apt update
+          sudo apt install -y git build-essential bc bison flex libssl-dev libelf-dev zip curl python3 gcc-aarch64-linux-gnu
+
+      - name: 拉取SukiSU 4.19专属源码
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/k-4.19/kernel/setup.sh" | bash -s builtin
+
+      - name: 打入MTK专属补丁
+        run: |
+          if [ "${{ github.event.inputs.disable_encrypt }}" == "true" ]; then
+            sed -i 's/CONFIG_MTK_SECURITY_SW_SUPPORT=y/CONFIG_MTK_SECURITY_SW_SUPPORT=n/g' arch/arm64/configs/*
+            sed -i 's/CONFIG_FORCE_ENCRYPT=y/CONFIG_FORCE_ENCRYPT=n/g' arch/arm64/configs/*
+          fi
+          if [ "${{ github.event.inputs.enable_susfs }}" == "true" ]; then
+            patch -p1 < patches/susfs-4.19.patch
+          fi
+
+      - name: 编译内核
+        run: |
+          make ARCH=arm64 O=out defconfig
+          make ARCH=arm64 O=out CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+
+      - name: 打包成TWRP卡刷包
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          sed -i 's/block=boot;/block=boot;\nis_slot_device=1;/g' AnyKernel3/anykernel.sh
+          cd AnyKernel3 && zip -r ../SukiSU-4.19.191-MTK-A12.zip *
+
+      - name: 上传编译成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-4.19.191-MTK-A12
+          path: SukiSU-4.19.191-MTK-A12.zip
